@@ -116,9 +116,6 @@ const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('overlay');
 const upgradeOverlay = document.getElementById('upgradeOverlay');
-const overlayTitle = document.getElementById('overlayTitle');
-const overlayText = document.getElementById('overlayText');
-const startBtn = document.getElementById('startBtn');
 const netStatus = document.getElementById('netStatus');
 const lobbyMenu = document.getElementById('lobbyMenu');
 const roomWaiting = document.getElementById('roomWaiting');
@@ -127,7 +124,7 @@ const joinRoomBtn = document.getElementById('joinRoomBtn');
 const roomCodeInput = document.getElementById('roomCodeInput');
 const roomCodeDisplay = document.getElementById('roomCodeDisplay');
 const playerStatusText = document.getElementById('playerStatusText');
-const startBtnRun = document.getElementById('startRunBtn');
+const startRunBtn = document.getElementById('startRunBtn');
 const loopCounterText = document.getElementById('loopCounterText');
 const upgradeButtonsContainer = document.getElementById('upgradeButtonsContainer');
 
@@ -155,7 +152,7 @@ function initWebSocket() {
       roomWaiting.style.display = 'flex';
       roomCodeDisplay.textContent = `ROOM: ${myRoomCode}`;
       playerStatusText.textContent = "You are Host. Waiting for player to join...";
-      startBtnRun.style.display = 'inline-block';
+      startRunBtn.style.display = 'inline-block';
     } else if (data.type === 'JOINED_SUCCESS') {
       myRoomCode = data.code;
       isHost = false;
@@ -205,7 +202,7 @@ joinRoomBtn.addEventListener('click', () => {
   ws.send(JSON.stringify({ type: 'JOIN_ROOM', code }));
 });
 
-startBtnRun.addEventListener('click', () => {
+startRunBtn.addEventListener('click', () => {
   if (isHost) {
     ws.send(JSON.stringify({ type: 'START_GAME' }));
     overlay.style.display = 'none';
@@ -487,7 +484,6 @@ function initStage1() {
 
   if (isHost) {
     for (let i = 0; i < 6; i++) spawnNathan();
-    // Spawn 2 health packs around the stage
     spawnHealthPickup(3.5, 3.5);
     spawnHealthPickup(12.5, 9.5);
   }
@@ -536,7 +532,6 @@ function enterBossRoom() {
       loopMultiplier: statScale
     });
 
-    // Spawn 3 health pickups specifically around the boss arena corners!
     spawnHealthPickup(2.5, 2.5);
     spawnHealthPickup(11.5, 2.5);
     spawnHealthPickup(7.0, 7.5);
@@ -545,7 +540,6 @@ function enterBossRoom() {
   triggerPS5Rumble(350, 0.8, 0.8);
 }
 
-// --- ROGUELIKE UPGRADE SELECTION ---
 function triggerUpgradeScreen() {
   gameState = 'UPGRADE';
   stopAllMusic();
@@ -671,27 +665,26 @@ function handlePlayerDeath() {
   triggerPS5Rumble(300, 1.0, 1.0);
 }
 
+function endGame(title, text) {
+  gameState = 'GAMEOVER';
+  stopAllMusic();
+  overlayTitle.textContent = title;
+  overlayTitle.style.color = title === 'VICTORY!' ? '#0f0' : '#f00';
+  document.getElementById('netStatus').textContent = text;
+  overlay.style.display = 'flex';
+}
+
 // --- UPDATE LOOP ---
 function update(dt) {
   const padInput = getPS5Input();
 
   if (gameState === 'MENU' || gameState === 'GAMEOVER') {
-    if (padInput && padInput.startPressed && !prevPadStartPressed && isHost) {
-      initAudio();
-      overlay.style.display = 'none';
-      loopCount = 1;
-      player.maxHp = 100; player.hp = 100; player.damage = 20; player.fireDelayMax = 0.5;
-      initStage1();
-    }
-    prevPadStartPressed = !!(padInput && padInput.startPressed);
     return;
   }
-  prevPadStartPressed = !!(padInput && padInput.startPressed);
 
   if (gameState !== 'PLAYING' && gameState !== 'BOSS') return;
 
   if (player.isDead) {
-    // Spectator Mode: Allow looking around top-down or moving ghost cam
     let rot = 0;
     if (keys['ArrowLeft']) rot -= player.rotSpeed * dt;
     if (keys['ArrowRight']) rot += player.rotSpeed * dt;
@@ -757,7 +750,6 @@ function update(dt) {
     }
   }
 
-  // Check health pickup collection (+30 HP)
   for (let i = pickups.length - 1; i >= 0; i--) {
     const pk = pickups[i];
     if (Math.hypot(player.x - pk.x, player.y - pk.y) < 0.6) {
@@ -767,7 +759,6 @@ function update(dt) {
     }
   }
 
-  // Send state update to server
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       type: 'UPDATE_STATE',
@@ -971,7 +962,6 @@ function renderMinimap() {
     }
   }
 
-  // Draw Health Pickups on Minimap as glowing green crosses
   for (let pk of pickups) {
     ctx.fillStyle = '#0ff';
     ctx.fillRect(offsetX + pk.x * scale - 2, offsetY + pk.y * scale - 2, 4, 4);
@@ -1024,7 +1014,6 @@ function renderMinimap() {
   }
 }
 
-// --- FULL TOP-DOWN SPECTATOR VIEW ---
 function renderSpectatorView() {
   const w = canvas.width;
   const h = canvas.height;
@@ -1037,7 +1026,6 @@ function renderSpectatorView() {
   const offsetX = (w - mapCols * scale) / 2;
   const offsetY = (h - mapRows * scale) / 2;
 
-  // Draw Map
   for (let r = 0; r < mapRows; r++) {
     for (let c = 0; c < mapCols; c++) {
       ctx.fillStyle = currentMap[r][c] === 1 ? '#422' : '#181818';
@@ -1045,7 +1033,6 @@ function renderSpectatorView() {
     }
   }
 
-  // Draw Health Pickups
   for (let pk of pickups) {
     ctx.fillStyle = '#0ffff5';
     ctx.beginPath();
@@ -1057,7 +1044,6 @@ function renderSpectatorView() {
     ctx.fillText('+30', offsetX + pk.x * scale, offsetY + pk.y * scale + 4);
   }
 
-  // Draw Enemies
   for (let e of enemies) {
     ctx.fillStyle = e.type === 'nathan' ? '#ff9900' : '#ff00ff';
     ctx.beginPath();
@@ -1065,7 +1051,6 @@ function renderSpectatorView() {
     ctx.fill();
   }
 
-  // Draw Remote Players
   for (let id in remotePlayers) {
     const rp = remotePlayers[id];
     if (!rp.isDead) {
@@ -1076,7 +1061,6 @@ function renderSpectatorView() {
     }
   }
 
-  // Spectator Overlay Text
   ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
   ctx.fillRect(0, 0, w, 50);
   ctx.fillStyle = '#ff3333';
