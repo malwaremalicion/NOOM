@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NOOM: ONLINE CO-OP</title>
+<!-- Include PeerJS from CDN for serverless browser-to-browser multiplayer -->
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<style>
+  body {
+    margin: 0;
+    background: #000;
+    color: #fff;
+    font-family: 'Courier New', Courier, monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+  }
+  #gameContainer {
+    position: relative;
+    width: 800px;
+    height: 600px;
+    border: 4px solid #444;
+    box-shadow: 0 0 20px rgba(255, 0, 0, 0.3);
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+  #overlay, #upgradeOverlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.92);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    z-index: 10;
+  }
+  #upgradeOverlay {
+    display: none;
+    background: rgba(10, 0, 20, 0.94);
+  }
+  button, input {
+    margin-top: 10px;
+    padding: 10px 20px;
+    font-size: 16px;
+    font-family: inherit;
+    font-weight: bold;
+  }
+  button {
+    background: #a00;
+    color: #fff;
+    border: 2px solid #f00;
+    cursor: pointer;
+  }
+  button:hover { background: #f00; }
+  input {
+    background: #222;
+    color: #fff;
+    border: 2px solid #666;
+    text-align: center;
+  }
+  .upgradeBtn {
+    background: #224;
+    border: 2px solid #66f;
+    min-width: 380px;
+    margin: 8px;
+  }
+  .upgradeBtn:hover { background: #448; }
+</style>
+</head>
+<body>
+
+<div id="gameContainer">
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  
+  <div id="overlay">
+    <h1 style="color: #f00; font-size: 56px; margin: 0; letter-spacing: 4px;">NOOM: ONLINE</h1>
+    <p id="connectionStatus" style="color: #ff0; font-size: 14px; margin: 5px 0;">Initializing Network...</p>
+    
+    <div id="menuControls" style="display:none; flex-direction: column; align-items: center;">
+      <button id="hostBtn">HOST NEW GAME (BECOME P1)</button>
+      <div style="margin-top: 15px; border-top: 1px solid #444; padding-top: 15px;">
+        <input type="text" id="peerIdInput" placeholder="Enter Host Code..." autocomplete="off">
+        <br>
+        <button id="joinBtn">JOIN GAME (BECOME P2)</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="upgradeOverlay">
+    <h2 style="color: #ff0; font-size: 36px; margin-bottom: 5px;">BOSS DEFEATED!</h2>
+    <p id="loopCounterText" style="color: #aaa; font-size: 16px; margin-top: 0;">Loop 1 Complete. Choose a Team Upgrade:</p>
+    <div id="upgradeButtonsContainer" style="display: flex; flex-direction: column; align-items: center; margin-top: 10px;"></div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const upgradeOverlay = document.getElementById('upgradeOverlay');
+const connectionStatus = document.getElementById('connectionStatus');
+const menuControls = document.getElementById('menuControls');
+const hostBtn = document.getElementById('hostBtn');
+const joinBtn = document.getElementById('joinBtn');
+const peerIdInput = document.getElementById('peerIdInput');
+const loopCounterText = document.getElementById('loopCounterText');
+const upgradeButtonsContainer = document.getElementById('upgradeButtonsContainer');
+
+// --- NETWORKING (PEERJS) ---
+let peer = null;
+let conn = null;
+let isHost = false;
+let myPeerId = '';
+
+function initPeer() {
+  // Uses free public PeerJS cloud signaling server
+  peer = new Peer();
+
+  peer.on('open', (id) => {
+    myPeerId = id;
+    connectionStatus.textContent = `Ready! Your ID: ${id}`;
+    connectionStatus.style.color = '#0f0';
+    menuControls.style.display = 'flex';
+  });
+
+  peer.on('connection', (connection) => {
+    if (!isHost) {
+      conn = connection;
+      isHost = true;
+      setupConnectionEvents();
+      connectionStatus.textContent = "Player 2 Connected! Starting game...";
+      setTimeout(startOnlineGame, 1000);
+    }
+  });
+
+  peer.on('error', (err) => {
+    connectionStatus.textContent = "Connection Error: " + err.type;
+    connectionStatus.style.color = '#f00';
+  });
+}
+
+function setupConnectionEvents() {
+  conn.on('data', (data) => {
+    handleNetworkData(data);
+  });
+  conn.on('close', () => {
+    alert("Peer disconnected!");
+    location.reload();
+  });
+}
+
+hostBtn.addEventListener('click', () => {
+  isHost = true;
+  connectionStatus.textContent = `Hosting room code: ${myPeerId}. Waiting for P2 to join...`;
+  hostBtn.disabled = true;
+  joinBtn.disabled = true;
+});
+
+joinBtn.addEventListener('click', () => {
+  const hostId = peerIdInput.value.trim();
+  if (!hostId) {
+    alert("Please enter a valid host code!");
+    return;
+  }
+  isHost = false;
+  connectionStatus.textContent = `Connecting to host ${hostId}...`;
+  conn = peer.connect(hostId);
+  setupConnectionEvents();
+  
+  conn.on('open', () => {
+    connectionStatus.textContent = "Connected to Host! Starting game...";
+    setTimeout(startOnlineGame, 1000);
+  });
+});
+
+// --- WEB AUDIO SYNTH ---
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playShootBeep() {
+  initAudio();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(680, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(180, audioCtx.currentTime + 0.09);
+  gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.09);
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(); osc.stop(audioCtx.currentTime + 0.09);
+}
+
+function playLaserSound(isPurple = false) {
+  initAudio();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(isPurple ? 220 : 140, audioCtx.currentTime);
+  osc.frequency.linearRampToValueAtTime(isPurple ? 110 : 75, audioCtx.currentTime + 1.2);
+  gain.gain.setValueAtTime(0.28, audioCtx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 1.2);
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(); osc.stop(audioCtx.currentTime + 1.2);
+}
+
+// --- ASSET LOADER ---
+function loadAsset(src, fallbackColor, label) {
+  const img = new Image();
+  img.loaded = false;
+  img.onload = () => { img.loaded = true; };
+  img.onerror = () => {
+    const fb = document.createElement('canvas');
+    fb.width = 64; fb.height = 64;
+    const fctx = fb.getContext('2d');
+    fctx.fillStyle = fallbackColor; fctx.fillRect(0, 0, 64, 64);
+    fctx.strokeStyle = '#000'; fctx.lineWidth = 4; fctx.strokeRect(0, 0, 64, 64);
+    fctx.fillStyle = '#fff'; fctx.font = 'bold 9px monospace'; fctx.textAlign = 'center';
+    fctx.fillText(label, 32, 36);
+    img.fallback = fb;
+  };
+  img.src = src;
+  return img;
+}
+
+const assets = {
+  brick: loadAsset('brick.png', '#7a2e2e', 'BRICK'),
+  gun: loadAsset('Gun.png', '#555', 'GUN'),
+  shoot: loadAsset('shoot.png', '#ffaa00', 'BANG!'),
+  nathan: loadAsset('NATHAN.png', '#2e7a3e', 'NATHAN'),
+  nathanHurt: loadAsset('NATHANhurt.png', '#ff0000', 'OUCH'),
+  un: loadAsset('un.png', '#4a2e7a', 'ULTRA NATHAN'),
+  unHurt: loadAsset('unhurt.png', '#ff55ff', 'UN HURT'),
+  stanley: loadAsset('STANLEY.png', '#5a3e1e', 'STANLEY'),
+  stanleyHurt: loadAsset('STANLEYhurt.png', '#00ffaa', 'STANLEY OUCH'),
+  kars: loadAsset('KARS.png', '#3a1e5a', 'KARS'),
+  karsHurt: loadAsset('KARShurt.png', '#ff00ff', 'KARS OUCH'),
+  jojo: loadAsset('jojo.png', '#2e5a7a', 'JOJO')
+};
+
+// Music tracks
+const bgmRegular = new Audio('bgm.mp3'); bgmRegular.loop = true;
+const bgmUltraNathan = new Audio('shit.mp3'); bgmUltraNathan.loop = true;
+const bgmStanley = new Audio('stanley.mp3'); bgmStanley.loop = true;
+const bgmAwakening = new Audio('awaken.mp3'); bgmAwakening.loop = true;
+
+function stopAllMusic() {
+  bgmRegular.pause(); bgmRegular.currentTime = 0;
+  bgmUltraNathan.pause(); bgmUltraNathan.currentTime = 0;
+  bgmStanley.pause(); bgmStanley.currentTime = 0;
+  bgmAwakening.pause(); bgmAwakening.currentTime = 0;
+}
+
+// --- MAPS ---
+const stage1Map = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,1,1,0,0,0,0,0,0,0,1,1,0,0,1],
+  [1,0,1,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1],
+  [1,0,1,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,1,1,0,0,0,0,0,0,0,1,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+const bossMap = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+// --- GAME STATE ---
+let currentMap = stage1Map;
+let gameState = 'MENU';
+let kills = 0;
+const KILLS_NEEDED = 20;
+let loopCount = 1;
+
+const teamStats = { damage: 20, fireDelayMax: 0.5 };
+
+const localPlayer = { x: 7.5, y: 6.5, dirX: 0.0, dirY: 1.0, planeX: -0.66, planeY: 0.0, hp: 100, maxHp: 100, moveSpeed: 4.5, rotSpeed: 2.8, fireDelay: 0, shootAnimTimer: 0, hurtFlash: 0 };
+const remotePlayer = { x: 8.5, y: 6.5, dirX: 0.0, dirY: 1.0, planeX: -0.66, planeY: 0.0, hp: 100, maxHp: 100 };
+
+let enemies = [];
+let projectiles = [];
+let activeBeam = null;
+let zBuffer = new Array(canvas.width);
+
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space' && (gameState === 'PLAYING' || gameState === 'BOSS')) {
+    e.preventDefault();
+    shootGun();
+  }
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function spawnNathan() {
+  if (!isHost) return; // Only host spawns enemies & syncs
+  let x, y;
+  do {
+    x = Math.floor(Math.random() * (currentMap[0].length - 2)) + 1.5;
+    y = Math.floor(Math.random() * (currentMap.length - 2)) + 1.5;
+  } while (currentMap[Math.floor(y)][Math.floor(x)] !== 0 || Math.hypot(x - localPlayer.x, y - localPlayer.y) < 3.0);
+
+  enemies.push({ type: 'nathan', x: x, y: y, hp: 30, maxHp: 30, hurtTimer: 0, shootCooldown: 1.5 + Math.random() * 2.0, speed: 1.4 });
+}
+
+function startOnlineGame() {
+  overlay.style.display = 'none';
+  initAudio();
+  loopCount = 1;
+  initStage1();
+  requestAnimationFrame(gameLoop);
+}
+
+function initStage1() {
+  currentMap = stage1Map;
+  gameState = 'PLAYING';
+  kills = 0;
+  localPlayer.x = isHost ? 7.5 : 8.5; localPlayer.y = 6.5;
+  remotePlayer.x = isHost ? 8.5 : 7.5; remotePlayer.y = 6.5;
+  localPlayer.fireDelay = 0; localPlayer.shootAnimTimer = 0; localPlayer.hurtFlash = 0;
+  enemies = []; projectiles = []; activeBeam = null;
+  stopAllMusic();
+  bgmRegular.play().catch(() => {});
+
+  if (isHost) {
+    for (let i = 0; i < 6; i++) spawnNathan();
+  }
+}
+
+function enterBossRoom() {
+  currentMap = bossMap;
+  gameState = 'BOSS';
+  localPlayer.x = isHost ? 6.5 : 7.5; localPlayer.y = 10.5;
+  remotePlayer.x = isHost ? 7.5 : 6.5; remotePlayer.y = 10.5;
+  enemies = []; projectiles = []; activeBeam = null;
+  stopAllMusic();
+
+  let bossType = 'ultra_nathan', baseHp = 2500, bossName = 'ULTRA NATHAN';
+  if (loopCount === 10) { bossType = 'kars'; baseHp = 7500; bossName = 'KARS'; bgmAwakening.play().catch(()=>{}); }
+  else if (loopCount === 5) { bossType = 'stanley'; baseHp = 4000; bossName = 'STANLEY'; bgmStanley.play().catch(()=>{}); }
+  else { bgmUltraNathan.play().catch(()=>{}); }
+
+  let statScale = 1.0 + (loopCount - 1) * 0.12;
+  let bossHp = Math.floor(baseHp * statScale);
+
+  if (isHost) {
+    enemies.push({
+      type: bossType, name: bossName, x: 7.0, y: 2.5,
+      hp: bossHp, maxHp: bossHp, hurtTimer: 0,
+      shootCooldown: bossType === 'kars' ? 0.45 : (bossType === 'stanley' ? 0.55 : 0.75),
+      laserTimer: bossType === 'kars' ? 6.5 : 9.0, speed: 1.8 * statScale, loopMultiplier: statScale
+    });
+  }
+}
+
+function triggerUpgradeScreen() {
+  gameState = 'UPGRADE';
+  stopAllMusic();
+  upgradeButtonsContainer.innerHTML = '';
+  loopCounterText.textContent = `Loop ${loopCount} Complete! Choose Team Upgrade:`;
+
+  const possibleUpgrades = [
+    { title: "+50 Team Max Health & Heal", apply: () => { localPlayer.maxHp += 50; localPlayer.hp = localPlayer.maxHp; remotePlayer.maxHp += 50; remotePlayer.hp = remotePlayer.maxHp; } },
+    { title: "+20 Shared Gun Damage", apply: () => { teamStats.damage += 20; } },
+    { title: "Faster Fire Rate (-15% Cooldown)", apply: () => { teamStats.fireDelayMax = Math.max(0.12, teamStats.fireDelayMax * 0.85); } }
+  ];
+
+  possibleUpgrades.slice(0, 3).forEach(upg => {
+    const btn = document.createElement('button');
+    btn.className = 'upgradeBtn';
+    btn.textContent = upg.title;
+    btn.addEventListener('click', () => {
+      upg.apply();
+      upgradeOverlay.style.display = 'none';
+      loopCount++;
+      initStage1();
+    });
+    upgradeButtonsContainer.appendChild(btn);
+  });
+  upgradeOverlay.style.display = 'flex';
+}
+
+function shootGun() {
+  if (localPlayer.fireDelay > 0) return;
+  localPlayer.fireDelay = teamStats.fireDelayMax;
+  localPlayer.shootAnimTimer = 0.18;
+  playShootBeep();
+
+  let hitEnemy = null, closestDist = Infinity;
+  for (let e of enemies) {
+    const dx = e.x - localPlayer.x, dy = e.y - localPlayer.y, dist = Math.hypot(dx, dy);
+    const invDet = 1.0 / (localPlayer.planeX * localPlayer.dirY - localPlayer.dirX * localPlayer.planeY);
+    const transformX = invDet * (localPlayer.dirY * dx - localPlayer.dirX * dy);
+    const transformY = invDet * (-localPlayer.planeY * dx + localPlayer.planeX * dy);
+
+    if (transformY > 0) {
+      const spriteScreenX = Math.floor((canvas.width / 2) * (1 + transformX / transformY));
+      const spriteWidth = Math.abs(Math.floor(canvas.height / transformY));
+      if (Math.abs(spriteScreenX - canvas.width / 2) < spriteWidth * 0.45 && transformY < zBuffer[Math.floor(canvas.width / 2)] && dist < closestDist) {
+        closestDist = dist;
+        hitEnemy = e;
+      }
+    }
+  }
+
+  if (hitEnemy) {
+    if (isHost) {
+      applyDamageToEnemy(hitEnemy);
+    } else {
+      conn.send({ type: 'SHOOT_HIT', damage: teamStats.damage });
+    }
+  }
+}
+
+function applyDamageToEnemy(e) {
+  e.hp -= teamStats.damage;
+  e.hurtTimer = 0.25;
+  if (e.hp <= 0) {
+    enemies = enemies.filter(item => item !== e);
+    if (e.type === 'nathan' && gameState === 'PLAYING') {
+      kills++;
+      if (kills >= KILLS_NEEDED) {
+        enterBossRoom();
+        if (isHost) conn.send({ type: 'ENTER_BOSS', loopCount });
+      } else if (enemies.length < 6 && (kills + enemies.length) < KILLS_NEEDED) {
+        spawnNathan();
+      }
+    } else if (gameState === 'BOSS') {
+      stopAllMusic();
+      activeBeam = null;
+      if (e.type === 'kars') {
+        endGame('VICTORY!', 'ONLINE CO-OP VICTORY OVER KARS!');
+        if (isHost) conn.send({ type: 'GAME_OVER', title: 'VICTORY!', text: 'VICTORY OVER KARS!' });
+      } else {
+        triggerUpgradeScreen();
+        if (isHost) conn.send({ type: 'TRIGGER_UPGRADE' });
+      }
+    }
+  }
+  if (isHost) syncGameState();
+}
+
+function handleNetworkData(data) {
+  if (data.type === 'POS_UPDATE') {
+    remotePlayer.x = data.x;
+    remotePlayer.y = data.y;
+    remotePlayer.dirX = data.dirX;
+    remotePlayer.dirY = data.dirY;
+  } else if (data.type === 'SHOOT_HIT' && isHost) {
+    if (enemies.length > 0) applyDamageToEnemy(enemies[0]);
+  } else if (data.type === 'SYNC_STATE' && !isHost) {
+    enemies = data.enemies;
+    projectiles = data.projectiles;
+    kills = data.kills;
+    gameState = data.gameState;
+    currentMap = data.currentMap === 'boss' ? bossMap : stage1Map;
+  } else if (data.type === 'ENTER_BOSS' && !isHost) {
+    loopCount = data.loopCount;
+    enterBossRoom();
+  } else if (data.type === 'TRIGGER_UPGRADE' && !isHost) {
+    triggerUpgradeScreen();
+  } else if (data.type === 'GAME_OVER' && !isHost) {
+    endGame(data.title, data.text);
+  }
+}
+
+function syncGameState() {
+  if (isHost && conn && conn.open) {
+    conn.send({
+      type: 'SYNC_STATE',
+      enemies, projectiles, kills, gameState,
+      currentMap: gameState === 'BOSS' ? 'boss' : 'stage1'
+    });
+  }
+}
+
+function endGame(title, text) {
+  gameState = 'GAMEOVER';
+  stopAllMusic();
+  overlay.style.display = 'flex';
+  menuControls.style.display = 'none';
+  connectionStatus.textContent = `${title} - ${text}`;
+}
+
+// --- UPDATE LOOP ---
+function update(dt) {
+  if (gameState !== 'PLAYING' && gameState !== 'BOSS') return;
+
+  if (localPlayer.fireDelay > 0) localPlayer.fireDelay -= dt;
+  if (localPlayer.shootAnimTimer > 0) localPlayer.shootAnimTimer -= dt;
+  if (localPlayer.hurtFlash > 0) localPlayer.hurtFlash -= dt;
+
+  let rot = 0;
+  if (keys['ArrowLeft']) rot -= localPlayer.rotSpeed * dt;
+  if (keys['ArrowRight']) rot += localPlayer.rotSpeed * dt;
+  if (rot !== 0) {
+    const oldDirX = localPlayer.dirX;
+    localPlayer.dirX = localPlayer.dirX * Math.cos(rot) - localPlayer.dirY * Math.sin(rot);
+    localPlayer.dirY = oldDirX * Math.sin(rot) + localPlayer.dirY * Math.cos(rot);
+    const oldPlaneX = localPlayer.planeX;
+    localPlayer.planeX = localPlayer.planeX * Math.cos(rot) - localPlayer.planeY * Math.sin(rot);
+    localPlayer.planeY = oldPlaneX * Math.sin(rot) + localPlayer.planeY * Math.cos(rot);
+  }
+
+  let forward = 0, strafe = 0;
+  if (keys['KeyW']) forward += 1;
+  if (keys['KeyS']) forward -= 1;
+  if (keys['KeyD']) strafe += 1;
+  if (keys['KeyA']) strafe -= 1;
+
+  let moveX = localPlayer.dirX * forward + localPlayer.planeX * strafe;
+  let moveY = localPlayer.dirY * forward + localPlayer.planeY * strafe;
+  const len = Math.hypot(moveX, moveY);
+  if (len > 0) {
+    moveX = (moveX / len) * localPlayer.moveSpeed * dt;
+    moveY = (moveY / len) * localPlayer.moveSpeed * dt;
+    if (currentMap[Math.floor(localPlayer.y)][Math.floor(localPlayer.x + moveX + Math.sign(moveX) * 0.25)] === 0) localPlayer.x += moveX;
+    if (currentMap[Math.floor(localPlayer.y + moveY + Math.sign(moveY) * 0.25)][Math.floor(localPlayer.x)] === 0) localPlayer.y += moveY;
+  }
+
+  // Send position to peer
+  if (conn && conn.open) {
+    conn.send({ type: 'POS_UPDATE', x: localPlayer.x, y: localPlayer.y, dirX: localPlayer.dirX, dirY: localPlayer.dirY });
+  }
+
+  if (isHost) {
+    for (let e of enemies) {
+      if (e.hurtTimer > 0) e.hurtTimer -= dt;
+      const dx = localPlayer.x - e.x, dy = localPlayer.y - e.y, dist = Math.hypot(dx, dy);
+      if (dist > 2.5) {
+        const vx = (dx / dist) * e.speed * dt, vy = (dy / dist) * e.speed * dt;
+        if (currentMap[Math.floor(e.y)][Math.floor(e.x + vx)] === 0) e.x += vx;
+        if (currentMap[Math.floor(e.y + vy)][Math.floor(e.x)] === 0) e.y += vy;
+      }
+    }
+    syncGameState();
+  }
+}
+
+// --- RENDERING ---
+function getImgSource(assetObj) { return assetObj.loaded ? assetObj : (assetObj.fallback || null); }
+
+function render() {
+  const w = canvas.width, h = canvas.height;
+  ctx.fillStyle = gameState === 'BOSS' ? '#1a0505' : '#1c1c1c'; ctx.fillRect(0, 0, w, h / 2);
+  ctx.fillStyle = gameState === 'BOSS' ? '#2b1111' : '#333333'; ctx.fillRect(0, h / 2, w, h / 2);
+
+  const brickImg = getImgSource(assets.brick);
+  for (let x = 0; x < w; x++) {
+    const cameraX = 2 * x / w - 1;
+    const rayDirX = localPlayer.dirX + localPlayer.planeX * cameraX;
+    const rayDirY = localPlayer.dirY + localPlayer.planeY * cameraX;
+    let mapX = Math.floor(localPlayer.x), mapY = Math.floor(localPlayer.y);
+    const deltaDistX = Math.abs(1 / rayDirX), deltaDistY = Math.abs(1 / rayDirY);
+    let stepX = rayDirX < 0 ? -1 : 1, stepY = rayDirY < 0 ? -1 : 1;
+    let sideDistX = rayDirX < 0 ? (localPlayer.x - mapX) * deltaDistX : (mapX + 1.0 - localPlayer.x) * deltaDistX;
+    let sideDistY = rayDirY < 0 ? (localPlayer.y - mapY) * deltaDistY : (mapY + 1.0 - localPlayer.y) * deltaDistY;
+    let hit = 0, side = 0;
+    while (hit === 0) {
+      if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; }
+      else { sideDistY += deltaDistY; mapY += stepY; side = 1; }
+      if (currentMap[mapY][mapX] > 0) hit = 1;
+    }
+    const perpWallDist = side === 0 ? sideDistX - deltaDistX : sideDistY - deltaDistY;
+    zBuffer[x] = perpWallDist;
+    const lineHeight = Math.floor(h / perpWallDist);
+    let wallX = side === 0 ? localPlayer.y + perpWallDist * rayDirY : localPlayer.x + perpWallDist * rayDirX;
+    wallX -= Math.floor(wallX);
+
+    if (brickImg) {
+      let texX = Math.floor(wallX * 64);
+      ctx.drawImage(brickImg, texX, 0, 1, 64, x, -lineHeight / 2 + h / 2, 1, lineHeight);
+    }
+  }
+
+  // Render sprites (Enemies + Remote Player)
+  const renderList = [];
+  enemies.forEach(e => renderList.push({ kind: 'enemy', obj: e, x: e.x, y: e.y, dist: (localPlayer.x - e.x)**2 + (localPlayer.y - e.y)**2 }));
+  renderList.push({ kind: 'player', x: remotePlayer.x, y: remotePlayer.y, dist: (localPlayer.x - remotePlayer.x)**2 + (localPlayer.y - remotePlayer.y)**2 });
+  renderList.sort((a, b) => b.dist - a.dist);
+
+  renderList.forEach(item => {
+    const spriteX = item.x - localPlayer.x, spriteY = item.y - localPlayer.y;
+    const invDet = 1.0 / (localPlayer.planeX * localPlayer.dirY - localPlayer.dirX * localPlayer.planeY);
+    const transformX = invDet * (localPlayer.dirY * spriteX - localPlayer.dirX * spriteY);
+    const transformY = invDet * (-localPlayer.planeY * spriteX + localPlayer.planeX * spriteY);
+
+    if (transformY > 0.1) {
+      const spriteScreenX = Math.floor((w / 2) * (1 + transformX / transformY));
+      const spriteHeight = Math.abs(Math.floor(h / transformY));
+      const drawStartX = Math.floor(-spriteHeight / 2 + spriteScreenX);
+
+      let imgObj = item.kind === 'player' ? assets.jojo : assets.nathan;
+      let img = getImgSource(imgObj);
+      if (img) {
+        for (let stripe = Math.max(0, drawStartX); stripe < Math.min(w, drawStartX + spriteHeight); stripe++) {
+          if (transformY < zBuffer[stripe]) {
+            let texX = Math.floor(((stripe - drawStartX) * 64) / spriteHeight);
+            ctx.drawImage(img, texX, 0, 1, 64, stripe, -spriteHeight / 2 + h / 2, 1, spriteHeight);
+          }
+        }
+      }
+    }
+  });
+
+  // Gun render
+  const gunImg = getImgSource(localPlayer.shootAnimTimer > 0 ? assets.shoot : assets.gun);
+  if (gunImg) ctx.drawImage(gunImg, (w - 280) / 2, h - 280, 280, 280);
+
+  // HUD
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 18px Courier New';
+  ctx.fillText(`HP: ${localPlayer.hp} | KILLS: ${kills}/${KILLS_NEEDED} | LOOP: ${loopCount}`, 20, 30);
+}
+
+let lastTime = performance.now();
+function gameLoop(now) {
+  const dt = Math.min(0.1, (now - lastTime) / 1000);
+  lastTime = now;
+  update(dt);
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// Start peer initialization when loaded
+initPeer();
+</script>
+</body>
+</html>

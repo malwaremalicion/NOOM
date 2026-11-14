@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NOOM: WS ONLINE CO-OP</title>
+<style>
+  body {
+    margin: 0; background: #000; color: #fff;
+    font-family: 'Courier New', Courier, monospace;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 100vh; overflow: hidden; user-select: none;
+  }
+  #gameContainer { position: relative; width: 800px; height: 600px; border: 4px solid #444; box-shadow: 0 0 20px rgba(255, 0, 0, 0.3); }
+  canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  #overlay {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.92); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; z-index: 10;
+  }
+  button { margin-top: 15px; padding: 12px 28px; font-size: 18px; font-family: inherit; font-weight: bold; background: #a00; color: #fff; border: 2px solid #f00; cursor: pointer; }
+  button:hover { background: #f00; }
+</style>
+</head>
+<body>
+
+<div id="gameContainer">
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  
+  <div id="overlay">
+    <h1 style="color: #f00; font-size: 56px; margin: 0; letter-spacing: 4px;">NOOM: WEBSOCKET CO-OP</h1>
+    <p id="status" style="color: #ff0; font-size: 16px;">Connecting to game server...</p>
+    <button id="startBtn" style="display:none;">CLICK TO ENTER GAME</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const statusText = document.getElementById('status');
+const startBtn = document.getElementById('startBtn');
+
+let ws = null;
+let serverState = { players: {}, enemies: [], kills: 0, loopCount: 1 };
+let myId = null;
+
+const localPlayer = {
+  x: 7.5, y: 6.5, dirX: 0.0, dirY: 1.0, planeX: -0.66, planeY: 0.0,
+  hp: 100, maxHp: 100, moveSpeed: 4.5, rotSpeed: 2.8, fireDelay: 0, shootAnimTimer: 0
+};
+
+// --- ASSETS ---
+function loadAsset(src, fallbackColor, label) {
+  const img = new Image();
+  img.onload = () => { img.loaded = true; };
+  img.onerror = () => {
+    const fb = document.createElement('canvas');
+    fb.width = 64; fb.height = 64;
+    const fctx = fb.getContext('2d');
+    fctx.fillStyle = fallbackColor; fctx.fillRect(0, 0, 64, 64);
+    fctx.strokeStyle = '#000'; fctx.lineWidth = 4; fctx.strokeRect(0, 0, 64, 64);
+    fctx.fillStyle = '#fff'; fctx.font = 'bold 9px monospace'; fctx.textAlign = 'center'; fctx.fillText(label, 32, 36);
+    img.fallback = fb;
+  };
+  img.src = src;
+  return img;
+}
+
+const assets = {
+  brick: loadAsset('brick.png', '#7a2e2e', 'BRICK'),
+  gun: loadAsset('Gun.png', '#555', 'GUN'),
+  shoot: loadAsset('shoot.png', '#ffaa00', 'BANG!'),
+  nathan: loadAsset('NATHAN.png', '#2e7a3e', 'NATHAN'),
+  jojo: loadAsset('jojo.png', '#2e5a7a', 'JOJO')
+};
+
+const stage1Map = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,1,1,0,0,0,0,0,0,0,1,1,0,0,1],
+  [1,0,1,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1],
+  [1,0,1,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,1,1,0,0,0,0,0,0,0,1,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+// Connect to WebSocket Server
+function connectWebSocket() {
+  ws = new WebSocket('ws://localhost:3000');
+  
+  ws.onopen = () => {
+    statusText.textContent = "Connected to Server!";
+    statusText.style.color = '#0f0';
+    startBtn.style.display = 'inline-block';
+    ws.send(JSON.stringify({ type: 'JOIN' }));
+  };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === 'STATE_UPDATE') {
+      serverState = data.state;
+    }
+  };
+
+  ws.onerror = () => {
+    statusText.textContent = "Server connection failed! Make sure node server.js is running.";
+    statusText.style.color = '#f00';
+  };
+}
+
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; });
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+startBtn.addEventListener('click', () => {
+  overlay.style.display = 'none';
+  requestAnimationFrame(gameLoop);
+});
+
+let zBuffer = new Array(canvas.width);
+
+function update(dt) {
+  let rot = 0;
+  if (keys['ArrowLeft']) rot -= localPlayer.rotSpeed * dt;
+  if (keys['ArrowRight']) rot += localPlayer.rotSpeed * dt;
+  if (rot !== 0) {
+    const oldDirX = localPlayer.dirX;
+    localPlayer.dirX = localPlayer.dirX * Math.cos(rot) - localPlayer.dirY * Math.sin(rot);
+    localPlayer.dirY = oldDirX * Math.sin(rot) + localPlayer.dirY * Math.cos(rot);
+    const oldPlaneX = localPlayer.planeX;
+    localPlayer.planeX = localPlayer.planeX * Math.cos(rot) - localPlayer.planeY * Math.sin(rot);
+    localPlayer.planeY = oldPlaneX * Math.sin(rot) + localPlayer.planeY * Math.cos(rot);
+  }
+
+  let forward = 0, strafe = 0;
+  if (keys['KeyW']) forward += 1;
+  if (keys['KeyS']) forward -= 1;
+  if (keys['KeyD']) strafe += 1;
+  if (keys['KeyA']) strafe -= 1;
+
+  let moveX = localPlayer.dirX * forward + localPlayer.planeX * strafe;
+  let moveY = localPlayer.dirY * forward + localPlayer.planeY * strafe;
+  const len = Math.hypot(moveX, moveY);
+  if (len > 0) {
+    moveX = (moveX / len) * localPlayer.moveSpeed * dt;
+    moveY = (moveY / len) * localPlayer.moveSpeed * dt;
+    if (stage1Map[Math.floor(localPlayer.y)][Math.floor(localPlayer.x + moveX + Math.sign(moveX) * 0.25)] === 0) localPlayer.x += moveX;
+    if (stage1Map[Math.floor(localPlayer.y + moveY + Math.sign(moveY) * 0.25)][Math.floor(localPlayer.x)] === 0) localPlayer.y += moveY;
+  }
+
+  // Send position update to server
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'UPDATE_POS',
+      x: localPlayer.x, y: localPlayer.y,
+      dirX: localPlayer.dirX, dirY: localPlayer.dirY
+    }));
+  }
+}
+
+function render() {
+  const w = canvas.width, h = canvas.height;
+  ctx.fillStyle = '#1c1c1c'; ctx.fillRect(0, 0, w, h / 2);
+  ctx.fillStyle = '#333333'; ctx.fillRect(0, h / 2, w, h / 2);
+
+  const brickImg = assets.brick.loaded ? assets.brick : assets.brick.fallback;
+  for (let x = 0; x < w; x++) {
+    const cameraX = 2 * x / w - 1;
+    const rayDirX = localPlayer.dirX + localPlayer.planeX * cameraX;
+    const rayDirY = localPlayer.dirY + localPlayer.planeY * cameraX;
+    let mapX = Math.floor(localPlayer.x), mapY = Math.floor(localPlayer.y);
+    const deltaDistX = Math.abs(1 / rayDirX), deltaDistY = Math.abs(1 / rayDirY);
+    let stepX = rayDirX < 0 ? -1 : 1, stepY = rayDirY < 0 ? -1 : 1;
+    let sideDistX = rayDirX < 0 ? (localPlayer.x - mapX) * deltaDistX : (mapX + 1.0 - localPlayer.x) * deltaDistX;
+    let sideDistY = rayDirY < 0 ? (localPlayer.y - mapY) * deltaDistY : (mapY + 1.0 - localPlayer.y) * deltaDistY;
+    let hit = 0, side = 0;
+    while (hit === 0) {
+      if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; }
+      else { sideDistY += deltaDistY; mapY += stepY; side = 1; }
+      if (stage1Map[mapY][mapX] > 0) hit = 1;
+    }
+    const perpWallDist = side === 0 ? sideDistX - deltaDistX : sideDistY - deltaDistY;
+    zBuffer[x] = perpWallDist;
+    const lineHeight = Math.floor(h / perpWallDist);
+    let wallX = side === 0 ? localPlayer.y + perpWallDist * rayDirY : localPlayer.x + perpWallDist * rayDirX;
+    wallX -= Math.floor(wallX);
+
+    if (brickImg) {
+      let texX = Math.floor(wallX * 64);
+      ctx.drawImage(brickImg, texX, 0, 1, 64, x, -lineHeight / 2 + h / 2, 1, lineHeight);
+    }
+  }
+
+  // Render other connected players (`jojo.png`) and enemies
+  const renderList = [];
+  for (let id in serverState.players) {
+    if (id !== myId) {
+      const p = serverState.players[id];
+      renderList.push({ kind: 'player', x: p.x, y: p.y, dist: (localPlayer.x - p.x)**2 + (localPlayer.y - p.y)**2 });
+    }
+  }
+
+  renderList.sort((a, b) => b.dist - a.dist);
+  renderList.forEach(item => {
+    const spriteX = item.x - localPlayer.x, spriteY = item.y - localPlayer.y;
+    const invDet = 1.0 / (localPlayer.planeX * localPlayer.dirY - localPlayer.dirX * localPlayer.planeY);
+    const transformX = invDet * (localPlayer.dirY * spriteX - localPlayer.dirX * spriteY);
+    const transformY = invDet * (-localPlayer.planeY * spriteX + localPlayer.planeX * spriteY);
+
+    if (transformY > 0.1) {
+      const spriteScreenX = Math.floor((w / 2) * (1 + transformX / transformY));
+      const spriteHeight = Math.abs(Math.floor(h / transformY));
+      const drawStartX = Math.floor(-spriteHeight / 2 + spriteScreenX);
+
+      let img = assets.jojo.loaded ? assets.jojo : assets.jojo.fallback;
+      if (img) {
+        for (let stripe = Math.max(0, drawStartX); stripe < Math.min(w, drawStartX + spriteHeight); stripe++) {
+          if (transformY < zBuffer[stripe]) {
+            let texX = Math.floor(((stripe - drawStartX) * 64) / spriteHeight);
+            ctx.drawImage(img, texX, 0, 1, 64, stripe, -spriteHeight / 2 + h / 2, 1, spriteHeight);
+          }
+        }
+      }
+    }
+  });
+
+  const gunImg = assets.gun.loaded ? assets.gun : assets.gun.fallback;
+  if (gunImg) ctx.drawImage(gunImg, (w - 280) / 2, h - 280, 280, 280);
+
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 18px Courier New';
+  ctx.fillText(`ONLINE CO-OP | PLAYERS ONLINE: ${Object.keys(serverState.players).length}`, 20, 30);
+}
+
+let lastTime = performance.now();
+function gameLoop(now) {
+  const dt = Math.min(0.1, (now - lastTime) / 1000);
+  lastTime = now;
+  update(dt);
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+connectWebSocket();
+</script>
+</body>
+</html>

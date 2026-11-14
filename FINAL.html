@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NOOM: ONLINE CO-OP INFINITE</title>
+<style>
+  body {
+    margin: 0;
+    background: #000;
+    color: #fff;
+    font-family: 'Courier New', Courier, monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+  }
+  #gameContainer {
+    position: relative;
+    width: 800px;
+    height: 600px;
+    border: 4px solid #444;
+    box-shadow: 0 0 20px rgba(255, 0, 0, 0.3);
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+  #overlay, #upgradeOverlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.92);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    z-index: 10;
+  }
+  #upgradeOverlay {
+    display: none;
+    background: rgba(10, 0, 20, 0.94);
+  }
+  button, input {
+    margin-top: 10px;
+    padding: 12px 24px;
+    font-size: 16px;
+    font-family: inherit;
+    font-weight: bold;
+  }
+  button {
+    background: #a00;
+    color: #fff;
+    border: 2px solid #f00;
+    cursor: pointer;
+  }
+  button:hover {
+    background: #f00;
+  }
+  input {
+    background: #222;
+    color: #fff;
+    border: 2px solid #666;
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .upgradeBtn {
+    background: #224;
+    border: 2px solid #66f;
+    min-width: 380px;
+    margin: 8px;
+  }
+  .upgradeBtn:hover {
+    background: #448;
+  }
+</style>
+</head>
+<body>
+
+<div id="gameContainer">
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  
+  <div id="overlay">
+    <h1 id="overlayTitle" style="color: #f00; font-size: 56px; margin: 0; letter-spacing: 4px;">NOOM ONLINE</h1>
+    <p id="netStatus" style="color: #ff0; font-size: 14px; margin: 8px 0;">Connecting to server...</p>
+    
+    <div id="lobbyMenu" style="display:none; flex-direction: column; align-items: center;">
+      <button id="createRoomBtn">HOST NEW ROOM</button>
+      <div style="margin-top: 15px; border-top: 1px solid #444; padding-top: 15px;">
+        <input type="text" id="roomCodeInput" placeholder="ROOM CODE" maxlength="4">
+        <br>
+        <button id="joinRoomBtn">JOIN ROOM</button>
+      </div>
+    </div>
+
+    <div id="roomWaiting" style="display:none; flex-direction: column; align-items: center;">
+      <h2 id="roomCodeDisplay" style="color: #0f0; font-size: 32px; margin: 5px 0;">ROOM: ----</h2>
+      <p id="playerStatusText" style="color: #aaa; font-size: 16px;">Waiting for players...</p>
+      <button id="startRunBtn" style="display:none; background:#080; border-color:#0f0;">START RUN</button>
+    </div>
+  </div>
+
+  <div id="upgradeOverlay">
+    <h2 style="color: #ff0; font-size: 36px; margin-bottom: 5px;">BOSS DEFEATED!</h2>
+    <p id="loopCounterText" style="color: #aaa; font-size: 16px; margin-top: 0;">Loop 1 Complete. Choose your Roguelike Upgrade:</p>
+    <div id="upgradeButtonsContainer" style="display: flex; flex-direction: column; align-items: center; margin-top: 10px;"></div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const upgradeOverlay = document.getElementById('upgradeOverlay');
+const overlayTitle = document.getElementById('overlayTitle');
+const netStatus = document.getElementById('netStatus');
+const lobbyMenu = document.getElementById('lobbyMenu');
+const roomWaiting = document.getElementById('roomWaiting');
+const createRoomBtn = document.getElementById('createRoomBtn');
+const joinRoomBtn = document.getElementById('joinRoomBtn');
+const roomCodeInput = document.getElementById('roomCodeInput');
+const roomCodeDisplay = document.getElementById('roomCodeDisplay');
+const playerStatusText = document.getElementById('playerStatusText');
+const startRunBtn = document.getElementById('startRunBtn');
+const loopCounterText = document.getElementById('loopCounterText');
+const upgradeButtonsContainer = document.getElementById('upgradeButtonsContainer');
+
+// --- WEBSOCKET CONNECTION ---
+let ws = null;
+let isHost = false;
+let myRoomCode = '';
+let remotePlayers = {};
+
+function initWebSocket() {
+  ws = new WebSocket('ws://localhost:3000');
+
+  ws.onopen = () => {
+    netStatus.textContent = "Connected to Server!";
+    netStatus.style.color = '#0f0';
+    lobbyMenu.style.display = 'flex';
+  };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === 'ROOM_CREATED') {
+      myRoomCode = data.code;
+      isHost = true;
+      lobbyMenu.style.display = 'none';
+      roomWaiting.style.display = 'flex';
+      roomCodeDisplay.textContent = `ROOM: ${myRoomCode}`;
+      playerStatusText.textContent = "You are Host. Waiting for player to join...";
+      startRunBtn.style.display = 'inline-block';
+    } else if (data.type === 'JOINED_SUCCESS') {
+      myRoomCode = data.code;
+      isHost = false;
+      lobbyMenu.style.display = 'none';
+      roomWaiting.style.display = 'flex';
+      roomCodeDisplay.textContent = `ROOM: ${myRoomCode}`;
+      playerStatusText.textContent = "Joined! Waiting for Host to start the run...";
+    } else if (data.type === 'PLAYER_JOINED') {
+      if (isHost) {
+        playerStatusText.textContent = "Player Connected! Ready to start.";
+      }
+    } else if (data.type === 'START_GAME_CLIENT') {
+      overlay.style.display = 'none';
+      initAudio();
+      initStage1();
+      requestAnimationFrame(gameLoop);
+    } else if (data.type === 'STATE_SYNC') {
+      remotePlayers = data.players;
+      enemies = data.enemies;
+      kills = data.kills;
+      loopCount = data.loopCount;
+      gameState = data.gameState;
+    } else if (data.type === 'ERROR') {
+      alert(data.message);
+      netStatus.textContent = data.message;
+      netStatus.style.color = '#f00';
+    }
+  };
+
+  ws.onerror = () => {
+    netStatus.textContent = "Server connection failed! Make sure node server.js is running.";
+    netStatus.style.color = '#f00';
+  };
+}
+
+createRoomBtn.addEventListener('click', () => {
+  ws.send(JSON.stringify({ type: 'CREATE_ROOM' }));
+});
+
+joinRoomBtn.addEventListener('click', () => {
+  const code = roomCodeInput.value.trim();
+  if (code.length !== 4) {
+    alert("Please enter a valid 4-character room code.");
+    return;
+  }
+  ws.send(JSON.stringify({ type: 'JOIN_ROOM', code }));
+});
+
+startRunBtn.addEventListener('click', () => {
+  if (isHost) {
+    ws.send(JSON.stringify({ type: 'START_GAME' }));
+    overlay.style.display = 'none';
+    initAudio();
+    initStage1();
+    requestAnimationFrame(gameLoop);
+  }
+});
+
+// --- WEB AUDIO SYNTH ---
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+}
+
+function playShootBeep() {
+  initAudio();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(680, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(180, audioCtx.currentTime + 0.09);
+  gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.09);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.09);
+}
+
+function playLaserSound(isPurple = false) {
+  initAudio();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(isPurple ? 220 : 140, audioCtx.currentTime);
+  osc.frequency.linearRampToValueAtTime(isPurple ? 110 : 75, audioCtx.currentTime + 1.2);
+  gain.gain.setValueAtTime(0.28, audioCtx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 1.2);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 1.2);
+}
+
+// --- ASSET LOADER ---
+function loadAsset(src, fallbackColor, label) {
+  const img = new Image();
+  img.loaded = false;
+  img.onload = () => { img.loaded = true; };
+  img.onerror = () => {
+    const fb = document.createElement('canvas');
+    fb.width = 64; fb.height = 64;
+    const fctx = fb.getContext('2d');
+    fctx.fillStyle = fallbackColor;
+    fctx.fillRect(0, 0, 64, 64);
+    fctx.strokeStyle = '#000';
+    fctx.lineWidth = 4;
+    fctx.strokeRect(0, 0, 64, 64);
+    fctx.fillStyle = '#fff';
+    fctx.font = 'bold 9px monospace';
+    fctx.textAlign = 'center';
+    fctx.fillText(label, 32, 36);
+    img.fallback = fb;
+  };
+  img.src = src;
+  return img;
+}
+
+const assets = {
+  brick: loadAsset('brick.png', '#7a2e2e', 'BRICK'),
+  gun: loadAsset('Gun.png', '#555', 'GUN'),
+  shoot: loadAsset('shoot.png', '#ffaa00', 'BANG!'),
+  nathan: loadAsset('NATHAN.png', '#2e7a3e', 'NATHAN'),
+  nathanHurt: loadAsset('NATHANhurt.png', '#ff0000', 'OUCH'),
+  un: loadAsset('un.png', '#4a2e7a', 'ULTRA NATHAN'),
+  unHurt: loadAsset('unhurt.png', '#ff55ff', 'UN HURT'),
+  stanley: loadAsset('STANLEY.png', '#5a3e1e', 'STANLEY'),
+  stanleyHurt: loadAsset('STANLEYhurt.png', '#00ffaa', 'STANLEY OUCH'),
+  kars: loadAsset('KARS.png', '#3a1e5a', 'KARS'),
+  karsHurt: loadAsset('KARShurt.png', '#ff00ff', 'KARS OUCH')
+};
+
+// Music tracks
+const bgmRegular = new Audio('bgm.mp3');
+bgmRegular.loop = true;
+const bgmUltraNathan = new Audio('shit.mp3');
+bgmUltraNathan.loop = true;
+const bgmStanley = new Audio('stanley.mp3');
+bgmStanley.loop = true;
+const bgmAwakening = new Audio('awaken.mp3');
+bgmAwakening.loop = true;
+
+function stopAllMusic() {
+  bgmRegular.pause(); bgmRegular.currentTime = 0;
+  bgmUltraNathan.pause(); bgmUltraNathan.currentTime = 0;
+  bgmStanley.pause(); bgmStanley.currentTime = 0;
+  bgmAwakening.pause(); bgmAwakening.currentTime = 0;
+}
+
+// --- MAPS ---
+const stage1Map = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,1,1,0,0,0,0,0,0,0,1,1,0,0,1],
+  [1,0,1,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1],
+  [1,0,1,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,1,1,0,0,0,0,0,0,0,1,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+const bossMap = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+// --- GAME STATE ---
+let currentMap = stage1Map;
+let gameState = 'MENU';
+let kills = 0;
+const KILLS_NEEDED = 20;
+let loopCount = 1;
+
+const player = {
+  x: 8.0, y: 6.5,
+  dirX: 0.0, dirY: 1.0,
+  planeX: -0.66, planeY: 0.0,
+  hp: 100, maxHp: 100,
+  damage: 20,
+  fireDelayMax: 0.5,
+  moveSpeed: 4.5,
+  rotSpeed: 2.8,
+  fireDelay: 0,
+  shootAnimTimer: 0,
+  hurtFlash: 0
+};
+
+let enemies = [];
+let projectiles = [];
+let activeBeam = null;
+let zBuffer = new Array(canvas.width);
+
+// --- INPUT HANDLING ---
+const keys = {};
+let gamepadConnected = false;
+let prevPadStartPressed = false;
+
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space' && (gameState === 'PLAYING' || gameState === 'BOSS')) {
+    e.preventDefault();
+    shootGun();
+  }
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+window.addEventListener('gamepadconnected', () => { gamepadConnected = true; });
+window.addEventListener('gamepaddisconnected', () => {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  gamepadConnected = Array.from(pads).some(p => p && p.connected);
+});
+
+function getPS5Input() {
+  if (!navigator.getGamepads) return null;
+  const pads = navigator.getGamepads();
+  let pad = null;
+  for (let i = 0; i < pads.length; i++) {
+    if (pads[i] && pads[i].connected) { pad = pads[i]; break; }
+  }
+  gamepadConnected = !!pad;
+  if (!pad) return null;
+
+  const deadzone = 0.15;
+  const applyDeadzone = val => Math.abs(val) < deadzone ? 0 : (val - Math.sign(val) * deadzone) / (1 - deadzone);
+
+  let moveX = applyDeadzone(pad.axes[0] || 0);
+  let moveY = applyDeadzone(pad.axes[1] || 0);
+  let lookX = applyDeadzone(pad.axes[2] || 0);
+
+  if (pad.buttons[12]?.pressed) moveY -= 1;
+  if (pad.buttons[13]?.pressed) moveY += 1;
+  if (pad.buttons[14]?.pressed) moveX -= 1;
+  if (pad.buttons[15]?.pressed) moveX += 1;
+
+  if (pad.buttons[4]?.pressed) lookX -= 0.85;
+  if (pad.buttons[5]?.pressed) lookX += 0.85;
+
+  const r2Value = pad.buttons[7]?.value || (pad.axes[5] !== undefined ? (pad.axes[5] + 1) / 2 : 0);
+  const shoot = pad.buttons[0]?.pressed || pad.buttons[7]?.pressed || r2Value > 0.25;
+  const startPressed = !!(pad.buttons[0]?.pressed || pad.buttons[9]?.pressed);
+
+  return { moveX, moveY, lookX, shoot, startPressed };
+}
+
+function triggerPS5Rumble(durationMs = 90, weakMag = 0.6, strongMag = 0.4) {
+  if (!navigator.getGamepads) return;
+  const pads = navigator.getGamepads();
+  for (let i = 0; i < pads.length; i++) {
+    const pad = pads[i];
+    if (pad && pad.connected && pad.vibrationActuator?.playEffect) {
+      pad.vibrationActuator.playEffect('dual-rumble', { duration: durationMs, weakMagnitude: weakMag, strongMagnitude: strongMag }).catch(() => {});
+      break;
+    }
+  }
+}
+
+// --- SPAWNING & ROGUELIKE LOGIC ---
+function spawnNathan() {
+  if (!isHost) return;
+  let x, y;
+  do {
+    x = Math.floor(Math.random() * (currentMap[0].length - 2)) + 1.5;
+    y = Math.floor(Math.random() * (currentMap.length - 2)) + 1.5;
+  } while (
+    currentMap[Math.floor(y)][Math.floor(x)] !== 0 ||
+    Math.hypot(x - player.x, y - player.y) < 3.5
+  );
+
+  enemies.push({
+    type: 'nathan',
+    x: x, y: y,
+    hp: 30, maxHp: 30,
+    hurtTimer: 0,
+    shootCooldown: 1.5 + Math.random() * 2.0,
+    speed: 1.4
+  });
+}
+
+function initStage1() {
+  currentMap = stage1Map;
+  gameState = 'PLAYING';
+  kills = 0;
+  player.x = isHost ? 8.0 : 7.0; player.y = 6.5;
+  player.dirX = 0.0; player.dirY = 1.0;
+  player.planeX = -0.66; player.planeY = 0.0;
+  player.fireDelay = 0; player.shootAnimTimer = 0; player.hurtFlash = 0;
+  enemies = []; projectiles = []; activeBeam = null;
+  stopAllMusic();
+  bgmRegular.play().catch(() => {});
+
+  if (isHost) {
+    for (let i = 0; i < 6; i++) spawnNathan();
+  }
+}
+
+function enterBossRoom() {
+  currentMap = bossMap;
+  gameState = 'BOSS';
+  player.x = 7.0; player.y = 10.5;
+  player.dirX = 0.0; player.dirY = -1.0;
+  player.planeX = 0.66; player.planeY = 0.0;
+  enemies = []; projectiles = []; activeBeam = null;
+  stopAllMusic();
+
+  let bossType = 'ultra_nathan';
+  let baseHp = 2000;
+  let bossName = 'ULTRA NATHAN';
+
+  if (loopCount === 10) {
+    bossType = 'kars';
+    baseHp = 6000;
+    bossName = 'KARS';
+    bgmAwakening.play().catch(() => {});
+  } else if (loopCount === 5) {
+    bossType = 'stanley';
+    baseHp = 3200;
+    bossName = 'STANLEY';
+    bgmStanley.play().catch(() => {});
+  } else {
+    bgmUltraNathan.play().catch(() => {});
+  }
+
+  let statScale = 1.0 + (loopCount - 1) * 0.1;
+  let bossHp = Math.floor(baseHp * statScale);
+
+  if (isHost) {
+    enemies.push({
+      type: bossType,
+      name: bossName,
+      x: 7.0, y: 2.5,
+      hp: bossHp, maxHp: bossHp,
+      hurtTimer: 0,
+      shootCooldown: bossType === 'kars' ? 0.5 : (bossType === 'stanley' ? 0.6 : 0.8),
+      laserTimer: bossType === 'kars' ? 7.0 : 10.0,
+      speed: 1.8 * statScale,
+      loopMultiplier: statScale
+    });
+  }
+
+  triggerPS5Rumble(350, 0.8, 0.8);
+}
+
+// --- ROGUELIKE UPGRADE SELECTION ---
+function triggerUpgradeScreen() {
+  gameState = 'UPGRADE';
+  stopAllMusic();
+  upgradeButtonsContainer.innerHTML = '';
+  loopCounterText.textContent = `Loop ${loopCount} Complete! Choose 1 of 3 Upgrades:`;
+
+  const possibleUpgrades = [
+    { title: "+35 Max Health & Heal to Full", apply: () => { player.maxHp += 35; player.hp = player.maxHp; } },
+    { title: "+15 Gun Damage", apply: () => { player.damage += 15; } },
+    { title: "Faster Fire Rate (-15% Cooldown)", apply: () => { player.fireDelayMax = Math.max(0.12, player.fireDelayMax * 0.85); } },
+    { title: "Instant Medkit (Restore 50 HP)", apply: () => { player.hp = Math.min(player.maxHp, player.hp + 50); } }
+  ];
+
+  const shuffled = possibleUpgrades.sort(() => 0.5 - Math.random());
+  const selected = shuffled.slice(0, 3);
+
+  selected.forEach(upg => {
+    const btn = document.createElement('button');
+    btn.className = 'upgradeBtn';
+    btn.textContent = upg.title;
+    btn.addEventListener('click', () => {
+      upg.apply();
+      upgradeOverlay.style.display = 'none';
+      loopCount++;
+      initStage1();
+    });
+    upgradeButtonsContainer.appendChild(btn);
+  });
+
+  upgradeOverlay.style.display = 'flex';
+}
+
+// --- RAYCAST HELPER ---
+function castLaserRay(startX, startY, dirX, dirY, maxDist) {
+  let step = 0.05;
+  for (let d = 0.2; d <= maxDist; d += step) {
+    const cx = startX + dirX * d;
+    const cy = startY + dirY * d;
+    const mx = Math.floor(cx);
+    const my = Math.floor(cy);
+    if (my < 0 || my >= currentMap.length || mx < 0 || mx >= currentMap[0].length || currentMap[my][mx] !== 0) {
+      return d;
+    }
+  }
+  return maxDist;
+}
+
+// --- COMBAT MECHANICS ---
+function shootGun() {
+  if (player.fireDelay > 0) return;
+
+  player.fireDelay = player.fireDelayMax;
+  player.shootAnimTimer = 0.18;
+  playShootBeep();
+  triggerPS5Rumble(80, 0.5, 0.35);
+
+  let hitEnemy = null;
+  let closestDist = Infinity;
+
+  for (let e of enemies) {
+    const dx = e.x - player.x;
+    const dy = e.y - player.y;
+    const dist = Math.hypot(dx, dy);
+
+    const invDet = 1.0 / (player.planeX * player.dirY - player.dirX * player.planeY);
+    const transformX = invDet * (player.dirY * dx - player.dirX * dy);
+    const transformY = invDet * (-player.planeY * dx + player.planeX * dy);
+
+    if (transformY > 0) {
+      const spriteScreenX = Math.floor((canvas.width / 2) * (1 + transformX / transformY));
+      const spriteWidth = Math.abs(Math.floor(canvas.height / transformY));
+
+      if (Math.abs(spriteScreenX - canvas.width / 2) < spriteWidth * 0.45) {
+        if (transformY < zBuffer[Math.floor(canvas.width / 2)] && dist < closestDist) {
+          closestDist = dist;
+          hitEnemy = e;
+        }
+      }
+    }
+  }
+
+  if (hitEnemy) {
+    if (gameState === 'BOSS') {
+      const boss = enemies.find(e => e.type !== 'nathan');
+      if (boss && hitEnemy !== boss) {
+        hitEnemy.hp -= player.damage;
+        hitEnemy.hurtTimer = 0.25;
+        if (hitEnemy.hp <= 0) {
+          enemies = enemies.filter(e => e !== hitEnemy);
+        }
+        return;
+      }
+    }
+
+    hitEnemy.hp -= player.damage;
+    hitEnemy.hurtTimer = 0.25;
+
+    if (hitEnemy.hp <= 0) {
+      enemies = enemies.filter(e => e !== hitEnemy);
+      if (hitEnemy.type === 'nathan' && gameState === 'PLAYING') {
+        kills++;
+        if (kills >= KILLS_NEEDED) {
+          enterBossRoom();
+        } else if (isHost && enemies.length < 6 && (kills + enemies.length) < KILLS_NEEDED) {
+          spawnNathan();
+        }
+      } else if (gameState === 'BOSS') {
+        stopAllMusic();
+        activeBeam = null;
+        if (hitEnemy.type === 'kars') {
+          endGame('VICTORY!', 'YOU DEFEATED KARS AND BEAT THE ENTIRE GAME!');
+        } else {
+          triggerUpgradeScreen();
+        }
+      }
+    }
+  }
+}
+
+function endGame(title, text) {
+  gameState = 'GAMEOVER';
+  stopAllMusic();
+  overlayTitle.textContent = title;
+  overlayTitle.style.color = title === 'VICTORY!' ? '#0f0' : '#f00';
+  overlayText.textContent = text;
+  startBtn.textContent = 'PLAY AGAIN (OR PRESS X / OPTIONS)';
+  overlay.style.display = 'flex';
+}
+
+// --- UPDATE LOOP ---
+function update(dt) {
+  const padInput = getPS5Input();
+
+  if (gameState === 'MENU' || gameState === 'GAMEOVER') {
+    if (padInput && padInput.startPressed && !prevPadStartPressed && isHost) {
+      initAudio();
+      overlay.style.display = 'none';
+      loopCount = 1;
+      player.maxHp = 100; player.hp = 100; player.damage = 20; player.fireDelayMax = 0.5;
+      initStage1();
+    }
+    prevPadStartPressed = !!(padInput && padInput.startPressed);
+    return;
+  }
+  prevPadStartPressed = !!(padInput && padInput.startPressed);
+
+  if (gameState !== 'PLAYING' && gameState !== 'BOSS') return;
+
+  if (player.fireDelay > 0) player.fireDelay -= dt;
+  if (player.shootAnimTimer > 0) player.shootAnimTimer -= dt;
+  if (player.hurtFlash > 0) player.hurtFlash -= dt;
+
+  if (padInput && padInput.shoot) {
+    shootGun();
+  }
+
+  let rot = 0;
+  if (keys['ArrowLeft']) rot -= player.rotSpeed * dt;
+  if (keys['ArrowRight']) rot += player.rotSpeed * dt;
+  if (padInput && padInput.lookX !== 0) {
+    rot += padInput.lookX * player.rotSpeed * 1.15 * dt;
+  }
+
+  if (rot !== 0) {
+    const oldDirX = player.dirX;
+    player.dirX = player.dirX * Math.cos(rot) - player.dirY * Math.sin(rot);
+    player.dirY = oldDirX * Math.sin(rot) + player.dirY * Math.cos(rot);
+    const oldPlaneX = player.planeX;
+    player.planeX = player.planeX * Math.cos(rot) - player.planeY * Math.sin(rot);
+    player.planeY = oldPlaneX * Math.sin(rot) + player.planeY * Math.cos(rot);
+  }
+
+  let forwardInput = 0;
+  let strafeInput = 0;
+  if (keys['KeyW']) forwardInput += 1;
+  if (keys['KeyS']) forwardInput -= 1;
+  if (keys['KeyD']) strafeInput += 1;
+  if (keys['KeyA']) strafeInput -= 1;
+
+  if (padInput) {
+    forwardInput -= padInput.moveY;
+    strafeInput += padInput.moveX;
+  }
+
+  let moveX = player.dirX * forwardInput + player.planeX * strafeInput;
+  let moveY = player.dirY * forwardInput + player.planeY * strafeInput;
+
+  const moveLen = Math.hypot(moveX, moveY);
+  if (moveLen > 0) {
+    const scale = Math.min(1, moveLen);
+    moveX = (moveX / moveLen) * scale * player.moveSpeed * dt;
+    moveY = (moveY / moveLen) * scale * player.moveSpeed * dt;
+
+    const pad = 0.25;
+    if (currentMap[Math.floor(player.y)][Math.floor(player.x + moveX + Math.sign(moveX) * pad)] === 0) {
+      player.x += moveX;
+    }
+    if (currentMap[Math.floor(player.y + moveY + Math.sign(moveY) * pad)][Math.floor(player.x)] === 0) {
+      player.y += moveY;
+    }
+  }
+
+  // Send state update to server
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'UPDATE_STATE',
+      player: { x: player.x, y: player.y, dirX: player.dirX, dirY: player.dirY, color: isHost ? '#00f' : '#0ff' },
+      enemies, kills, loopCount, gameState
+    }));
+  }
+
+  if (activeBeam) {
+    activeBeam.duration -= dt;
+    activeBeam.damageTick -= dt;
+
+    const bx = activeBeam.endX - activeBeam.startX;
+    const by = activeBeam.endY - activeBeam.startY;
+    const bLenSq = bx * bx + by * by;
+    let t = ((player.x - activeBeam.startX) * bx + (player.y - activeBeam.startY) * by) / bLenSq;
+    t = Math.max(0, Math.min(1, t));
+    const closestX = activeBeam.startX + t * bx;
+    const closestY = activeBeam.startY + t * by;
+    const distToBeam = Math.hypot(player.x - closestX, player.y - closestY);
+
+    let beamDamage = activeBeam.color === 'purple' ? 22 : 15;
+
+    if (distToBeam < 0.65 && activeBeam.damageTick <= 0) {
+      player.hp -= beamDamage;
+      player.hurtFlash = 0.25;
+      activeBeam.damageTick = 0.35;
+      triggerPS5Rumble(180, 0.9, 0.9);
+      if (player.hp <= 0) {
+        player.hp = 0;
+        activeBeam = null;
+        endGame('YOU DIED', 'VAPORIZED BY BOSS BEAM.');
+        return;
+      }
+    }
+
+    if (activeBeam.duration <= 0) {
+      activeBeam = null;
+    }
+  }
+
+  if (isHost) {
+    for (let e of enemies) {
+      if (e.hurtTimer > 0) e.hurtTimer -= dt;
+
+      const dx = player.x - e.x;
+      const dy = player.y - e.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > 2.5 && !(e.type !== 'nathan' && activeBeam)) {
+        const vx = (dx / dist) * e.speed * dt;
+        const vy = (dy / dist) * e.speed * dt;
+        if (currentMap[Math.floor(e.y)][Math.floor(e.x + vx)] === 0) e.x += vx;
+        if (currentMap[Math.floor(e.y + vy)][Math.floor(e.x)] === 0) e.y += vy;
+      }
+
+      e.shootCooldown -= dt;
+      if (e.shootCooldown <= 0) {
+        if (e.type === 'kars') {
+          for (let b = 0; b < 3; b++) {
+            setTimeout(() => {
+              const bdx = player.x - e.x;
+              const bdy = player.y - e.y;
+              const bdist = Math.hypot(bdx, bdy);
+              projectiles.push({
+                x: e.x, y: e.y,
+                vx: (bdx / bdist) * 7.5,
+                vy: (bdy / bdist) * 7.5,
+                color: 'purple',
+                damage: 18
+              });
+            }, b * 120);
+          }
+          e.shootCooldown = 0.65;
+        } else if (e.type === 'stanley') {
+          projectiles.push({
+            x: e.x, y: e.y,
+            vx: (dx / dist) * 5.5,
+            vy: (dy / dist) * 5.5,
+            color: 'green',
+            damage: 12
+          });
+          if (enemies.length < 5) {
+            spawnNathan();
+          }
+          e.shootCooldown = 0.9;
+        } else if (e.type === 'ultra_nathan') {
+          projectiles.push({
+            x: e.x, y: e.y,
+            vx: (dx / dist) * 6.5,
+            vy: (dy / dist) * 6.5,
+            color: 'red',
+            damage: 10
+          });
+          e.shootCooldown = 0.45 + Math.max(0, 0.35 - (loopCount * 0.02));
+        } else {
+          projectiles.push({
+            x: e.x, y: e.y,
+            vx: (dx / dist) * 4.5,
+            vy: (dy / dist) * 4.5,
+            color: 'red',
+            damage: 10
+          });
+          e.shootCooldown = 2.0 + Math.random() * 1.5;
+        }
+      }
+
+      if (e.type === 'kars') {
+        e.laserTimer -= dt;
+        if (e.laserTimer <= 0) {
+          e.laserTimer = 7.0;
+          const dirX = dx / dist;
+          const dirY = dy / dist;
+          const maxRange = castLaserRay(e.x, e.y, dirX, dirY, 20.0);
+          activeBeam = {
+            startX: e.x, startY: e.y,
+            endX: e.x + dirX * maxRange, endY: e.y + dirY * maxRange,
+            duration: 1.5, damageTick: 0, color: 'purple'
+          };
+          playLaserSound(true);
+          triggerPS5Rumble(400, 0.8, 1.0);
+        }
+      } else if (e.type === 'stanley') {
+        e.laserTimer -= dt;
+        if (e.laserTimer <= 0) {
+          e.laserTimer = 9.0;
+          const dirX = dx / dist;
+          const dirY = dy / dist;
+          const maxRange = castLaserRay(e.x, e.y, dirX, dirY, 20.0);
+          activeBeam = {
+            startX: e.x, startY: e.y,
+            endX: e.x + dirX * maxRange, endY: e.y + dirY * maxRange,
+            duration: 1.25, damageTick: 0, color: 'brown'
+          };
+          playLaserSound(false);
+          triggerPS5Rumble(350, 0.7, 0.8);
+        }
+      } else if (e.type === 'ultra_nathan') {
+        e.laserTimer -= dt;
+        if (e.laserTimer <= 0) {
+          e.laserTimer = 10.0;
+          const dirX = dx / dist;
+          const dirY = dy / dist;
+          const maxRange = castLaserRay(e.x, e.y, dirX, dirY, 20.0);
+          activeBeam = {
+            startX: e.x, startY: e.y,
+            endX: e.x + dirX * maxRange, endY: e.y + dirY * maxRange,
+            duration: 1.25, damageTick: 0, color: 'red'
+          };
+          playLaserSound(false);
+          triggerPS5Rumble(400, 0.7, 1.0);
+        }
+      }
+    }
+  }
+
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+
+    if (currentMap[Math.floor(p.y)][Math.floor(p.x)] !== 0) {
+      projectiles.splice(i, 1);
+      continue;
+    }
+
+    if (Math.hypot(p.x - player.x, p.y - player.y) < 0.35) {
+      player.hp -= (p.damage || 10);
+      player.hurtFlash = 0.25;
+      projectiles.splice(i, 1);
+      triggerPS5Rumble(140, 0.8, 0.6);
+
+      if (player.hp <= 0) {
+        player.hp = 0;
+        activeBeam = null;
+        endGame('YOU DIED', 'SLAIN BY ENEMY PROJECTILES.');
+      }
+    }
+  }
+}
+
+// --- RENDERING ---
+function getImgSource(assetObj) {
+  return assetObj.loaded ? assetObj : (assetObj.fallback || null);
+}
+
+function renderMinimap() {
+  const scale = 9;
+  const mapRows = currentMap.length;
+  const mapCols = currentMap[0].length;
+  const mapW = mapCols * scale;
+  const mapH = mapRows * scale;
+  const offsetX = canvas.width - mapW - 14;
+  const offsetY = 14;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
+  ctx.fillRect(offsetX - 4, offsetY - 4, mapW + 8, mapH + 8);
+  ctx.strokeStyle = '#777';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(offsetX - 4, offsetY - 4, mapW + 8, mapH + 8);
+
+  for (let r = 0; r < mapRows; r++) {
+    for (let c = 0; c < mapCols; c++) {
+      ctx.fillStyle = currentMap[r][c] === 1 ? '#833' : '#191919';
+      ctx.fillRect(offsetX + c * scale, offsetY + r * scale, scale - 0.5, scale - 0.5);
+    }
+  }
+
+  if (activeBeam) {
+    ctx.strokeStyle = activeBeam.color === 'purple' ? '#f0f' : (activeBeam.color === 'brown' ? '#840' : '#ff0055');
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(offsetX + activeBeam.startX * scale, offsetY + activeBeam.startY * scale);
+    ctx.lineTo(offsetX + activeBeam.endX * scale, offsetY + activeBeam.endY * scale);
+    ctx.stroke();
+  }
+
+  for (let p of projectiles) {
+    ctx.fillStyle = p.color === 'purple' ? '#d0f' : (p.color === 'green' ? '#0f0' : '#ff3333');
+    ctx.fillRect(offsetX + p.x * scale - 1.5, offsetY + p.y * scale - 1.5, 3, 3);
+  }
+
+  for (let e of enemies) {
+    ctx.fillStyle = e.type === 'kars' ? '#d0f' : (e.type === 'stanley' ? '#a52a2a' : (e.type === 'boss' ? '#ff00ff' : '#ff9900'));
+    const radius = e.type !== 'nathan' ? 4.5 : 3;
+    ctx.beginPath();
+    ctx.arc(offsetX + e.x * scale, offsetY + e.y * scale, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Render remote players on minimap as colored squares
+  for (let id in remotePlayers) {
+    const rp = remotePlayers[id];
+    ctx.fillStyle = rp.color || '#0ff';
+    ctx.fillRect(offsetX + rp.x * scale - 3, offsetY + rp.y * scale - 3, 6, 6);
+  }
+
+  const px = offsetX + player.x * scale;
+  const py = offsetY + player.y * scale;
+  ctx.strokeStyle = '#0f0';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.lineTo(px + player.dirX * 12, py + player.dirY * 12);
+  ctx.stroke();
+
+  ctx.fillStyle = '#0f0';
+  ctx.beginPath();
+  ctx.arc(px, py, 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function render() {
+  const w = canvas.width;
+  const h = canvas.height;
+
+  ctx.fillStyle = gameState === 'BOSS' ? '#1a0505' : '#1c1c1c';
+  ctx.fillRect(0, 0, w, h / 2);
+  ctx.fillStyle = gameState === 'BOSS' ? '#2b1111' : '#333333';
+  ctx.fillRect(0, h / 2, w, h / 2);
+
+  const brickImg = getImgSource(assets.brick);
+
+  for (let x = 0; x < w; x++) {
+    const cameraX = 2 * x / w - 1;
+    const rayDirX = player.dirX + player.planeX * cameraX;
+    const rayDirY = player.dirY + player.planeY * cameraX;
+
+    let mapX = Math.floor(player.x);
+    let mapY = Math.floor(player.y);
+
+    const deltaDistX = (rayDirX === 0) ? 1e30 : Math.abs(1 / rayDirX);
+    const deltaDistY = (rayDirY === 0) ? 1e30 : Math.abs(1 / rayDirY);
+
+    let stepX, stepY, sideDistX, sideDistY;
+    if (rayDirX < 0) {
+      stepX = -1;
+      sideDistX = (player.x - mapX) * deltaDistX;
+    } else {
+      stepX = 1;
+      sideDistX = (mapX + 1.0 - player.x) * deltaDistX;
+    }
+    if (rayDirY < 0) {
+      stepY = -1;
+      sideDistY = (player.y - mapY) * deltaDistY;
+    } else {
+      stepY = 1;
+      sideDistY = (mapY + 1.0 - player.y) * deltaDistY;
+    }
+
+    let hit = 0;
+    let side = 0;
+    while (hit === 0) {
+      if (sideDistX < sideDistY) {
+        sideDistX += deltaDistX;
+        mapX += stepX;
+        side = 0;
+      } else {
+        sideDistY += deltaDistY;
+        mapY += stepY;
+        side = 1;
+      }
+      if (currentMap[mapY][mapX] > 0) hit = 1;
+    }
+
+    const perpWallDist = (side === 0) ? (sideDistX - deltaDistX) : (sideDistY - deltaDistY);
+    zBuffer[x] = perpWallDist;
+
+    const lineHeight = Math.floor(h / perpWallDist);
+    const drawStart = Math.max(0, Math.floor(-lineHeight / 2 + h / 2));
+    const drawEnd = Math.min(h - 1, Math.floor(lineHeight / 2 + h / 2));
+
+    let wallX = (side === 0) ? (player.y + perpWallDist * rayDirY) : (player.x + perpWallDist * rayDirX);
+    wallX -= Math.floor(wallX);
+
+    if (brickImg) {
+      const texW = brickImg.width || 64;
+      const texH = brickImg.height || 64;
+      let texX = Math.floor(wallX * texW);
+      if (side === 0 && rayDirX > 0) texX = texW - texX - 1;
+      if (side === 1 && rayDirY < 0) texX = texW - texX - 1;
+
+      ctx.drawImage(brickImg, texX, 0, 1, texH, x, -lineHeight / 2 + h / 2, 1, lineHeight);
+      if (side === 1) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+        ctx.fillRect(x, drawStart, 1, drawEnd - drawStart);
+      }
+    }
+  }
+
+  const renderList = [];
+  for (let e of enemies) {
+    renderList.push({ kind: 'enemy', obj: e, x: e.x, y: e.y, dist: (player.x - e.x) ** 2 + (player.y - e.y) ** 2 });
+  }
+  for (let p of projectiles) {
+    renderList.push({ kind: 'proj', obj: p, x: p.x, y: p.y, dist: (player.x - p.x) ** 2 + (player.y - p.y) ** 2 });
+  }
+  for (let id in remotePlayers) {
+    const rp = remotePlayers[id];
+    renderList.push({ kind: 'remotePlayer', obj: rp, x: rp.x, y: rp.y, dist: (player.x - rp.x) ** 2 + (player.y - rp.y) ** 2 });
+  }
+
+  if (activeBeam) {
+    const beamDx = activeBeam.endX - activeBeam.startX;
+    const beamDy = activeBeam.endY - activeBeam.startY;
+    const beamLen = Math.hypot(beamDx, beamDy);
+    const steps = Math.max(10, Math.floor(beamLen * 6));
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      const bx = activeBeam.startX + beamDx * t;
+      const by = activeBeam.startY + beamDy * t;
+      renderList.push({ kind: 'laser', x: bx, y: by, dist: (player.x - bx) ** 2 + (player.y - by) ** 2, color: activeBeam.color });
+    }
+  }
+
+  renderList.sort((a, b) => b.dist - a.dist);
+
+  for (let item of renderList) {
+    const spriteX = item.x - player.x;
+    const spriteY = item.y - player.y;
+
+    const invDet = 1.0 / (player.planeX * player.dirY - player.dirX * player.planeY);
+    const transformX = invDet * (player.dirY * spriteX - player.dirX * spriteY);
+    const transformY = invDet * (-player.planeY * spriteX + player.planeX * spriteY);
+
+    if (transformY <= 0.1) continue;
+
+    const spriteScreenX = Math.floor((w / 2) * (1 + transformX / transformY));
+
+    if (item.kind === 'enemy') {
+      const e = item.obj;
+      const scale = e.type !== 'nathan' ? 1.35 : 0.9;
+      const spriteHeight = Math.abs(Math.floor((h / transformY) * scale));
+      const spriteWidth = spriteHeight;
+
+      const drawStartY = Math.floor(-spriteHeight / 2 + h / 2 + (h / transformY) * (1 - scale) * 0.5);
+      const drawStartX = Math.floor(-spriteWidth / 2 + spriteScreenX);
+
+      let imgObj;
+      if (e.type === 'kars') {
+        imgObj = e.hurtTimer > 0 ? assets.karsHurt : assets.kars;
+      } else if (e.type === 'stanley') {
+        imgObj = e.hurtTimer > 0 ? assets.stanleyHurt : assets.stanley;
+      } else if (e.type === 'ultra_nathan') {
+        imgObj = e.hurtTimer > 0 ? assets.unHurt : assets.un;
+      } else {
+        imgObj = e.hurtTimer > 0 ? assets.nathanHurt : assets.nathan;
+      }
+      
+      const img = getImgSource(imgObj);
+
+      if (img) {
+        ctx.save();
+        if (e.type === 'ultra_nathan' && loopCount > 1) {
+          ctx.filter = `hue-rotate(${(loopCount * 35) % 360}deg)`;
+        }
+        const texW = img.width || 64;
+        const texH = img.height || 64;
+        for (let stripe = Math.max(0, drawStartX); stripe < Math.min(w, drawStartX + spriteWidth); stripe++) {
+          if (transformY < zBuffer[stripe]) {
+            const texX = Math.floor(((stripe - drawStartX) * texW) / spriteWidth);
+            ctx.drawImage(img, texX, 0, 1, texH, stripe, drawStartY, 1, spriteHeight);
+          }
+        }
+        ctx.restore();
+      }
+    } else if (item.kind === 'remotePlayer') {
+      const rp = item.obj;
+      const size = Math.abs(Math.floor(h / transformY * 0.75));
+      const drawStartX = Math.floor(spriteScreenX - size / 2);
+      const drawStartY = Math.floor(h / 2 - size / 2);
+
+      for (let stripe = Math.max(0, drawStartX); stripe < Math.min(w, drawStartX + size); stripe++) {
+        if (transformY < zBuffer[stripe]) {
+          ctx.fillStyle = rp.color || '#0ff';
+          ctx.fillRect(stripe, drawStartY, 1, size);
+        }
+      }
+    } else if (item.kind === 'proj') {
+      const p = item.obj;
+      const size = Math.max(6, Math.abs(Math.floor((h / transformY) * 0.22)));
+      const drawStartX = Math.floor(spriteScreenX - size / 2);
+      const drawStartY = Math.floor(h / 2 - size / 2);
+
+      const checkX = Math.max(0, Math.min(w - 1, spriteScreenX));
+      if (transformY < zBuffer[checkX]) {
+        ctx.fillStyle = p.color === 'purple' ? '#c0f' : (p.color === 'green' ? '#0f8' : '#ff0000');
+        ctx.fillRect(drawStartX, drawStartY, size, size);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(drawStartX, drawStartY, size, size);
+      }
+    } else if (item.kind === 'laser') {
+      const radius = Math.max(12, Math.abs(Math.floor((h / transformY) * 0.42)));
+      const mouthOffsetY = Math.floor((h / transformY) * -0.14);
+      const beamY = Math.floor(h / 2 + mouthOffsetY);
+
+      const checkX = Math.max(0, Math.min(w - 1, spriteScreenX));
+      if (transformY < zBuffer[checkX]) {
+        ctx.fillStyle = item.color === 'purple' ? 'rgba(180, 0, 255, 0.6)' : (item.color === 'brown' ? 'rgba(139, 69, 19, 0.6)' : 'rgba(255, 0, 40, 0.55)');
+        ctx.beginPath();
+        ctx.arc(spriteScreenX, beamY, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.beginPath();
+        ctx.arc(spriteScreenX, beamY, radius * 0.48, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  const gunAsset = player.shootAnimTimer > 0 ? assets.shoot : assets.gun;
+  const gunImg = getImgSource(gunAsset);
+  if (gunImg) {
+    const gunW = 280;
+    const gunH = 280;
+    const recoilY = player.shootAnimTimer > 0 ? 15 : 0;
+    ctx.drawImage(gunImg, (w - gunW) / 2, h - gunH + recoilY, gunW, gunH);
+  }
+
+  ctx.strokeStyle = player.fireDelay > 0 ? '#888' : '#0f0';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(w / 2 - 10, h / 2);
+  ctx.lineTo(w / 2 + 10, h / 2);
+  ctx.moveTo(w / 2, h / 2 - 10);
+  ctx.lineTo(w / 2, h / 2 + 10);
+  ctx.stroke();
+
+  if (player.hurtFlash > 0) {
+    ctx.fillStyle = `rgba(255, 0, 0, ${player.hurtFlash * 1.5})`;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  // HUD
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(10, 10, 310, 88);
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(10, 10, 310, 88);
+
+  ctx.fillStyle = player.hp <= 30 ? '#f00' : '#fff';
+  ctx.font = 'bold 20px Courier New';
+  ctx.textAlign = 'left';
+  ctx.fillText(`HP: ${player.hp} / ${player.maxHp} (Loop ${loopCount})`, 22, 34);
+
+  ctx.fillStyle = '#ff0';
+  if (gameState === 'PLAYING') {
+    ctx.fillText(`NATHANS: ${kills} / ${KILLS_NEEDED}`, 22, 60);
+  } else if (gameState === 'BOSS') {
+    ctx.fillStyle = '#f00';
+    let bossLbl = loopCount === 10 ? 'BOSS: KARS' : (loopCount === 5 ? 'BOSS: STANLEY' : 'BOSS: ULTRA NATHAN');
+    ctx.fillText(bossLbl, 22, 60);
+  }
+
+  ctx.font = 'bold 13px Courier New';
+  ctx.fillStyle = gamepadConnected ? '#0af' : '#777';
+  ctx.fillText(gamepadConnected ? 'PS5 DUALSENSE: CONNECTED' : 'ROOM: ' + myRoomCode, 22, 84);
+
+  renderMinimap();
+
+  if (gameState === 'BOSS' && enemies.length > 0) {
+    const boss = enemies.find(e => e.type !== 'nathan') || enemies[0];
+    const barW = 560;
+    const barH = 28;
+    const barX = (w - barW) / 2;
+    const barY = h - 42;
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.fillRect(barX - 4, barY - 24, barW + 8, barH + 28);
+
+    ctx.fillStyle = '#ff4444';
+    ctx.font = 'bold 16px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${boss.name || 'BOSS'} (${Math.max(0, Math.floor(boss.hp))} / ${boss.maxHp})`, w / 2, barY - 6);
+
+    ctx.fillStyle = '#300';
+    ctx.fillRect(barX, barY, barW, barH);
+
+    const hpRatio = Math.max(0, boss.hp / boss.maxHp);
+    ctx.fillStyle = boss.type === 'kars' ? '#a0f' : (boss.type === 'stanley' ? '#0a8' : '#d00');
+    ctx.fillRect(barX, barY, barW * hpRatio, barH);
+
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(barX, barY, barW, barH);
+  }
+}
+
+let lastTime = performance.now();
+function gameLoop(now) {
+  const dt = Math.min(0.1, (now - lastTime) / 1000);
+  lastTime = now;
+
+  update(dt);
+  render();
+
+  requestAnimationFrame(gameLoop);
+}
+
+initWebSocket();
+</script>
+</body>
+</html>
